@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>无人车补货路径规划平台</title>
+    <script type="text/javascript">
+        window._AMapSecurityConfig = {
+            securityJsCode: "adb970884c06d6fa911add72fe6645b3",
+        }
+    </script>
+    <!-- 引入 Chart.js 用于统计图 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    <!-- 引入 SheetJS 用于导出 Excel -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family: 'Segoe UI','Microsoft YaHei',sans-serif; background:#f1f5f9; height:100vh; display:flex; flex-direction:column; }
+        .header { background:linear-gradient(135deg,#1e3a8a,#3b82f6); color:white; padding:1rem 2rem; font-size:1.5rem; font-weight:bold; }
+        .container { flex:1; display:flex; flex-direction:column; padding:1rem; gap:1rem; overflow-y:auto; }
+        .card { background:white; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.1); padding:1rem; }
+        .row { display:flex; flex-wrap:wrap; gap:1rem; align-items:flex-end; }
+        .form-group { display:flex; flex-direction:column; min-width:140px; flex:1; }
+        .form-group label { font-size:0.8rem; font-weight:600; color:#64748b; margin-bottom:0.3rem; }
+        .form-group input, .form-group textarea { padding:0.6rem 0.8rem; border:1px solid #cbd5e1; border-radius:8px; font-size:0.95rem; }
+        .form-group textarea { width:100%; height:100px; resize:vertical; font-family:monospace; }
+        .btn { padding:0.6rem 1.2rem; border:none; border-radius:8px; cursor:pointer; font-weight:600; }
+        .btn-primary { background:#2563eb; color:white; }
+        .btn-success { background:#059669; color:white; }
+        .btn-danger { background:#dc2626; color:white; }
+        .btn-warning { background:#f59e0b; color:white; }
+        .btn-secondary { background:#64748b; color:white; }
+        #map { flex:1; min-height:400px; border-radius:12px; box-shadow:0 2px 8px rgba(0,0,0,0.1); }
+        .depot-item { background:#f8fafc; border:1px dashed #cbd5e1; border-radius:8px; padding:0.5rem; display:flex; gap:0.5rem; align-items:center; margin-bottom:0.5rem; }
+        .depot-item input { width:120px; }
+        .remove-btn { cursor:pointer; color:#dc2626; font-weight:bold; }
+        .info-panel { white-space:pre-wrap; }
+        .legend { display:flex; flex-wrap:wrap; gap:10px; margin-bottom:10px; }
+        .legend-item { display:flex; align-items:center; gap:5px; }
+        .legend-color { width:16px; height:4px; background-color:black; }
+
+        /* 自定义标记样式 */
+        .start-marker {
+            width: 16px; height: 16px; background-color: #22c55e; border: 2px solid #166534;
+            border-radius: 2px; transform: rotate(45deg); box-shadow: 0 0 4px rgba(0,0,0,0.5);
+        }
+        .point-marker {
+            width: 12px; height: 12px; background-color: #ef4444; border: 2px solid #991b1b;
+            border-radius: 50%; box-shadow: 0 0 4px rgba(0,0,0,0.5);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">🚚 无人车补货路径规划平台</div>
+
+    <div class="container">
+        <div class="card">
+            <h3>起点（仓库）信息</h3>
+            <div id="depotContainer">
+                <!-- 默认一个起点 -->
+                <div class="depot-item">
+                    <label>坐标:</label>
+                    <input type="text" class="depot-coord" placeholder="108.95,34.27" value="108.95,34.27">
+                    <label>库存:</label>
+                    <input type="number" class="depot-stock" value="100" min="0">
+                    <span class="remove-btn" onclick="removeDepot(this)">✖</span>
+                </div>
+            </div>
+            <button class="btn btn-primary" onclick="addDepot()">➕ 添加起点</button>
+        </div>
+
+        <div class="card">
+            <h3>补货点信息（每行：经度,纬度,需求量）</h3>
+            <textarea id="pointsText" placeholder="108.90,34.20,2&#10;108.95,34.25,3&#10;109.00,34.30,1"></textarea>
+            <button class="btn btn-primary" onclick="importPoints()">📥 导入补货点</button>
+        </div>
+
+        <div class="card row">
+            <div class="form-group">
+                <label>货车容量</label>
+                <input type="number" id="capacity" value="20" min="1">
+            </div>
+            <div class="form-group">
+                <label>每起点车辆数</label>
+                <input type="number" id="numVehicles" value="2" min="1">
+            </div>
+            <div class="form-group">
+                <label>每公里成本(元)</label>
+                <input type="number" id="costPerKm" value="2.0" step="0.1">
+            </div>
+            <div class="form-group">
+                <label>固定成本(元/辆)</label>
+                <input type="number" id="fixedCost" value="50" step="1">
+            </div>
+            <button class="btn btn-success" onclick="plan()">🚀 开始规划</button>
+            <button class="btn btn-danger" onclick="clearAll()">🗑️ 清空</button>
+            <button class="btn btn-warning" onclick="exportReport()">📊 导出Excel</button>
+            <button class="btn btn-secondary" onclick="saveScenario()">💾 保存场景</button>
+            <button class="btn btn-secondary" onclick="loadScenario()">📂 加载场景</button>
+        </div>
+
+        <div id="map"></div>
+
+        <div class="card info-panel" id="infoPanel">
+            <div class="legend" id="legend"></div>
+            <div><strong>总距离：</strong><span id="totalDistance">-</span> km</div>
+            <div><strong>总成本：</strong><span id="totalCost">-</span> 元</div>
+            <div id="routeDetails"></div>
+            <div style="margin-top:15px;">
+                <canvas id="statsChart" height="100"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://webapi.amap.com/maps?v=2.0&key=e7fafc0434732d31943a81ec009da803&plugin=AMap.Driving"></script>
+    <script>
+        var map;
+        var points = [];          // 补货点数组 {lng,lat,demand,index}
+        var pointMarkers = [];
+        var polylines = [];
+        var startMarkers = [];
+        var lastResult = null;
+        var nextPointIndex = 1;
+        var chartInstance = null; // 保存图表实例，避免重复创建
+
+        // 颜色数组
+        const routeColors = ['#e53935', '#43a047', '#1e88e5', '#fb8c00', '#8e24aa', '#00acc1', '#6d4c41'];
+
+        window.onload = function() {
+            map = new AMap.Map('map', { zoom: 12, center: [108.95, 34.27] });
+            addStartMarker([108.95, 34.27]);
+        };
+
+        // 创建起点标记（绿色菱形）
+        function addStartMarker(coord) {
+            var marker = new AMap.Marker({
+                position: coord,
+                map: map,
+                content: '<div class="start-marker"></div>',
+                offset: new AMap.Pixel(-8, -8),
+                title: '起点'
+            });
+            startMarkers.push(marker);
+        }
+
+        // 创建补货点标记（红色圆形），带序号点击
+        function addPointMarker(coord, demand, index) {
+            var marker = new AMap.Marker({
+                position: coord,
+                map: map,
+                content: '<div class="point-marker"></div>',
+                offset: new AMap.Pixel(-6, -6),
+                title: '补货点 ' + index,
+                extData: { index: index, demand: demand }
+            });
+            marker.on('click', function(e) {
+                var data = e.target.getExtData();
+                alert('补货点序号：' + data.index + '\n需求量：' + data.demand);
+            });
+            pointMarkers.push(marker);
+        }
+
+        // 动态添加起点输入框
+        function addDepot() {
+            const container = document.getElementById('depotContainer');
+            const div = document.createElement('div');
+            div.className = 'depot-item';
+            div.innerHTML = `
+                <label>坐标:</label>
+                <input type="text" class="depot-coord" placeholder="108.95,34.27" value="108.95,34.27">
+                <label>库存:</label>
+                <input type="number" class="depot-stock" value="100" min="0">
+                <span class="remove-btn" onclick="removeDepot(this)">✖</span>
+            `;
+            container.appendChild(div);
+        }
+
+        function removeDepot(btn) {
+            btn.parentElement.remove();
+        }
+
+        // 获取所有起点信息
+        function getDepotsFromInputs() {
+            const items = document.querySelectorAll('.depot-item');
+            const depots = [];
+            items.forEach(item => {
+                const coordInput = item.querySelector('.depot-coord').value.trim();
+                const stockInput = item.querySelector('.depot-stock').value;
+                if (coordInput) {
+                    const parts = coordInput.split(',');
+                    if (parts.length === 2) {
+                        const lng = parseFloat(parts[0]);
+                        const lat = parseFloat(parts[1]);
+                        const stock = parseFloat(stockInput) || 0;
+                        if (!isNaN(lng) && !isNaN(lat)) {
+                            depots.push({ lng, lat, stock });
+                        }
+                    }
+                }
+            });
+            return depots;
+        }
+
+        // 导入补货点（分配序号）
+        function importPoints() {
+            const text = document.getElementById('pointsText').value.trim();
+            if (!text) { alert('请粘贴补货点数据'); return; }
+            const lines = text.split('\n');
+            let imported = 0;
+            lines.forEach(line => {
+                line = line.trim();
+                if (line === '') return;
+                const parts = line.split(',');
+                if (parts.length === 3) {
+                    const lng = parseFloat(parts[0]);
+                    const lat = parseFloat(parts[1]);
+                    const demand = parseFloat(parts[2]);
+                    if (!isNaN(lng) && !isNaN(lat) && !isNaN(demand)) {
+                        const index = nextPointIndex;
+                        nextPointIndex++;
+                        points.push({ lng, lat, demand, index });
+                        addPointMarker([lng, lat], demand, index);
+                        imported++;
+                    }
+                }
+            });
+            updateInfo();
+            if (imported > 0) alert(`成功导入 ${imported} 个补货点`);
+        }
+
+        function clearAll() {
+            pointMarkers.forEach(m => m.setMap(null));
+            pointMarkers = [];
+            polylines.forEach(p => p.setMap(null));
+            polylines = [];
+            startMarkers.forEach(m => m.setMap(null));
+            startMarkers = [];
+            points = [];
+            lastResult = null;
+            nextPointIndex = 1;
+            document.getElementById('pointsText').value = '';
+            document.getElementById('totalDistance').innerText = '-';
+            document.getElementById('totalCost').innerText = '-';
+            document.getElementById('routeDetails').innerHTML = '';
+            document.getElementById('legend').innerHTML = '';
+            if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+            updateInfo();
+            addStartMarker([108.95, 34.27]);
+        }
+
+        function updateInfo() {}
+
+        // 规划函数
+        function plan() {
+            const depots = getDepotsFromInputs();
+            if (depots.length === 0) { alert('请至少添加一个起点'); return; }
+            if (points.length === 0) { alert('请导入补货点'); return; }
+
+            // 重新绘制所有起点标记
+            startMarkers.forEach(m => m.setMap(null));
+            startMarkers = [];
+            depots.forEach(d => addStartMarker([d.lng, d.lat]));
+
+            const capacity = parseFloat(document.getElementById('capacity').value) || 20;
+            const numVehicles = parseInt(document.getElementById('numVehicles').value) || 2;
+            const costPerKm = parseFloat(document.getElementById('costPerKm').value) || 2.0;
+            const fixedCost = parseFloat(document.getElementById('fixedCost').value) || 50;
+
+            const data = {
+                depots: depots,
+                points: points,
+                capacity: capacity,
+                num_vehicles: numVehicles,
+                cost_per_km: costPerKm,
+                fixed_cost: fixedCost
+            };
+
+            document.getElementById('routeDetails').innerHTML = '⏳ 正在规划，请稍候...';
+            fetch('/solve', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data)
+            })
+            .then(res => res.json())
+            .then(data => {
+                lastResult = data;
+                polylines.forEach(p => p.setMap(null));
+                polylines = [];
+
+                if (data.routes) {
+                    // 更新图例
+                    updateLegend(data.routes);
+                    // 绘制统计图
+                    drawChart(data.routes);
+                    // 生成详细信息
+                    let detailsHtml = '';
+                    data.routes.forEach((routeInfo, idx) => {
+                        // 计算该车总需求
+                        let totalDemand = 0;
+                        routeInfo.route.forEach((coord, i) => {
+                            if (i === 0) return; // 跳过起点
+                            const point = points.find(p => 
+                                Math.abs(p.lng - coord[0]) < 0.000001 && 
+                                Math.abs(p.lat - coord[1]) < 0.000001
+                            );
+                            if (point) totalDemand += point.demand;
+                        });
+                        const utilization = (totalDemand / capacity * 100).toFixed(1);
+                        const accessOrder = routeInfo.route.map((coord, i) => {
+                            if (i === 0) return '起点';
+                            const point = points.find(p => 
+                                Math.abs(p.lng - coord[0]) < 0.000001 && 
+                                Math.abs(p.lat - coord[1]) < 0.000001
+                            );
+                            return `站点${point ? point.index : i}(${coord[0]},${coord[1]})`;
+                        }).join(' → ');
+
+                        detailsHtml += `<div style="color:${routeColors[idx % routeColors.length]}; margin-bottom:5px;">`;
+                        detailsHtml += `车辆 ${routeInfo.vehicle_index}（起点${routeInfo.depot_index+1}）<br>`;
+                        detailsHtml += `导航距离：${routeInfo.distance.toFixed(2)} km，成本：${routeInfo.cost.toFixed(2)} 元<br>`;
+                        detailsHtml += `装载量：${totalDemand} / ${capacity}，利用率：${utilization}%<br>`;
+                        detailsHtml += `访问顺序：${accessOrder}</div>`;
+                    });
+                    document.getElementById('totalDistance').innerText = data.total_distance.toFixed(2);
+                    document.getElementById('totalCost').innerText = data.total_cost.toFixed(2);
+                    document.getElementById('routeDetails').innerHTML = detailsHtml;
+
+                    // 绘制地图路线
+                    data.routes.forEach((routeInfo, idx) => {
+                        var driving = new AMap.Driving({
+                            map: map,
+                            hideMarkers: true,
+                            panel: null,
+                            autoFitView: false
+                        });
+                        var startCoord = routeInfo.route[0];
+                        var endCoord = routeInfo.route[routeInfo.route.length - 1];
+                        var waypoints = [];
+                        if (routeInfo.route.length > 2) {
+                            waypoints = routeInfo.route.slice(1, -1).map(p => new AMap.LngLat(p[0], p[1]));
+                        }
+                        driving.search(
+                            new AMap.LngLat(startCoord[0], startCoord[1]),
+                            new AMap.LngLat(endCoord[0], endCoord[1]),
+                            { waypoints: waypoints },
+                            function(status, result) {
+                                if (status === 'complete' && result.routes && result.routes[0]) {
+                                    var path = result.routes[0].path;
+                                    if (path && path.length > 0) {
+                                        var polyline = new AMap.Polyline({
+                                            path: path,
+                                            strokeColor: routeColors[idx % routeColors.length],
+                                            strokeWeight: 3,
+                                            strokeOpacity: 0.9,
+                                            map: map
+                                        });
+                                        polylines.push(polyline);
+                                    }
+                                } else {
+                                    var polyline = new AMap.Polyline({
+                                        path: routeInfo.route,
+                                        strokeColor: routeColors[idx % routeColors.length],
+                                        strokeWeight: 3,
+                                        map: map
+                                    });
+                                    polylines.push(polyline);
+                                }
+                                if (idx === data.routes.length - 1) {
+                                    map.setFitView(null, false, [100, 80, 100, 80]);
+                                }
+                            }
+                        );
+                    });
+                } else {
+                    document.getElementById('routeDetails').innerHTML = '❌ 规划失败';
+                }
+            })
+            .catch(err => {
+                console.error(err);
+                document.getElementById('routeDetails').innerHTML = '❌ 请求失败，请确保后端已启动';
+            });
+        }
+
+        // 更新图例
+        function updateLegend(routes) {
+            const legendDiv = document.getElementById('legend');
+            legendDiv.innerHTML = '';
+            routes.forEach((route, idx) => {
+                const item = document.createElement('div');
+                item.className = 'legend-item';
+                item.innerHTML = `<span class="legend-color" style="background-color:${routeColors[idx % routeColors.length]};"></span>车辆 ${route.vehicle_index}（起点${route.depot_index+1}）`;
+                legendDiv.appendChild(item);
+            });
+        }
+
+        // 绘制统计图
+        function drawChart(routes) {
+            const canvas = document.getElementById('statsChart');
+            if (chartInstance) { chartInstance.destroy(); }
+            const labels = routes.map(r => `车辆${r.vehicle_index}`);
+            const distances = routes.map(r => r.distance);
+            const costs = routes.map(r => r.cost);
+            chartInstance = new Chart(canvas, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [
+                        {
+                            label: '距离 (km)',
+                            data: distances,
+                            backgroundColor: 'rgba(37, 99, 235, 0.5)',
+                            borderColor: 'rgba(37, 99, 235, 1)',
+                            borderWidth: 1
+                        },
+                        {
+                            label: '成本 (元)',
+                            data: costs,
+                            backgroundColor: 'rgba(5, 150, 105, 0.5)',
+                            borderColor: 'rgba(5, 150, 105, 1)',
+                            borderWidth: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: { beginAtZero: true }
+                    }
+                }
+            });
+        }
+
+        // 导出Excel报告
+        function exportReport() {
+            if (!lastResult) { alert('请先进行路径规划'); return; }
+            // 准备数据
+            const rows = [];
+            rows.push(['车辆编号', '起点索引', '导航距离(km)', '成本(元)', '装载量', '容量', '利用率', '访问顺序']);
+            lastResult.routes.forEach(r => {
+                let totalDemand = 0;
+                r.route.forEach((coord, i) => {
+                    if (i === 0) return;
+                    const point = points.find(p => Math.abs(p.lng - coord[0]) < 0.000001 && Math.abs(p.lat - coord[1]) < 0.000001);
+                    if (point) totalDemand += point.demand;
+                });
+                const capacity = parseFloat(document.getElementById('capacity').value) || 20;
+                const utilization = (totalDemand / capacity * 100).toFixed(1) + '%';
+                const order = r.route.map((coord, i) => {
+                    if (i === 0) return '起点';
+                    const point = points.find(p => Math.abs(p.lng - coord[0]) < 0.000001 && Math.abs(p.lat - coord[1]) < 0.000001);
+                    return `站点${point ? point.index : i}`;
+                }).join(' → ');
+                rows.push([r.vehicle_index, r.depot_index+1, r.distance.toFixed(2), r.cost.toFixed(2), totalDemand, capacity, utilization, order]);
+            });
+            rows.push([]);
+            rows.push(['总距离', lastResult.total_distance.toFixed(2)]);
+            rows.push(['总成本', lastResult.total_cost.toFixed(2)]);
+
+            const ws = XLSX.utils.aoa_to_sheet(rows);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, '路径规划报告');
+            XLSX.writeFile(wb, '路径规划报告.xlsx');
+        }
+
+        // 保存场景
+        function saveScenario() {
+            const depots = getDepotsFromInputs();
+            const pointsText = document.getElementById('pointsText').value;
+            const capacity = document.getElementById('capacity').value;
+            const numVehicles = document.getElementById('numVehicles').value;
+            const costPerKm = document.getElementById('costPerKm').value;
+            const fixedCost = document.getElementById('fixedCost').value;
+            const scenario = {
+                depots: depots,
+                pointsText: pointsText,
+                capacity: capacity,
+                numVehicles: numVehicles,
+                costPerKm: costPerKm,
+                fixedCost: fixedCost
+            };
+            localStorage.setItem('savedScenario', JSON.stringify(scenario));
+            alert('场景已保存！');
+        }
+
+        // 加载场景
+        function loadScenario() {
+            const saved = localStorage.getItem('savedScenario');
+            if (!saved) { alert('没有保存的场景'); return; }
+            const scenario = JSON.parse(saved);
+            // 恢复起点输入框
+            const container = document.getElementById('depotContainer');
+            container.innerHTML = '';
+            scenario.depots.forEach(d => {
+                const div = document.createElement('div');
+                div.className = 'depot-item';
+                div.innerHTML = `
+                    <label>坐标:</label>
+                    <input type="text" class="depot-coord" value="${d.lng},${d.lat}">
+                    <label>库存:</label>
+                    <input type="number" class="depot-stock" value="${d.stock}" min="0">
+                    <span class="remove-btn" onclick="removeDepot(this)">✖</span>
+                `;
+                container.appendChild(div);
+            });
+            document.getElementById('pointsText').value = scenario.pointsText;
+            document.getElementById('capacity').value = scenario.capacity;
+            document.getElementById('numVehicles').value = scenario.numVehicles;
+            document.getElementById('costPerKm').value = scenario.costPerKm;
+            document.getElementById('fixedCost').value = scenario.fixedCost;
+            alert('场景已加载！');
+        }
+    </script>
+</body>
+</html>
