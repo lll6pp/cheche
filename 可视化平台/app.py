@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
+
 """
 无人车补货路径规划平台 - 后端（真实距离 + 2-opt 优化）
 """
+
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 import requests
@@ -49,7 +51,6 @@ def two_opt(route, dist_matrix):
                 if j - i == 1:
                     continue
                 new_route = best_route[:i] + best_route[i:j][::-1] + best_route[j:]
-                # 计算距离变化
                 old_dist = dist_matrix[best_route[i-1]][best_route[i]] + dist_matrix[best_route[j-1]][best_route[j]]
                 new_dist = dist_matrix[best_route[i-1]][best_route[j-1]] + dist_matrix[best_route[i]][best_route[j]]
                 if new_dist < old_dist:
@@ -87,8 +88,9 @@ def solve():
         for j in range(total_nodes):
             if i != j:
                 dist_matrix[i][j] = get_drive_distance(all_coords[i][0], all_coords[i][1],
-                                                       all_coords[j][0], all_coords[j][1])
-                time.sleep(0.03)
+                                                        all_coords[j][0], all_coords[j][1])
+            # 注释掉 sleep，加快计算速度，避免 Railway 超时
+            # time.sleep(0.03)
         print(f"完成 {i+1}/{total_nodes} 行")
 
     # 分配补货点给起点
@@ -123,7 +125,6 @@ def solve():
         if not assigned:
             continue
 
-        # 按离起点距离排序后，用容量分组
         assigned.sort(key=lambda idx: dist_matrix[depot_idx][idx])
         groups = []
         cur_group = []
@@ -139,7 +140,6 @@ def solve():
                 cur_load = demand
         if cur_group: groups.append(cur_group)
 
-        # 限制车辆数
         if len(groups) > num_vehicles:
             extra = []
             for g in groups[num_vehicles-1:]:
@@ -148,7 +148,6 @@ def solve():
             groups.append(extra)
 
         for veh_idx, group in enumerate(groups):
-            # 初始顺序：最近邻
             ordered = [depot_idx]
             remaining = group.copy()
             current = depot_idx
@@ -164,14 +163,11 @@ def solve():
                 remaining.remove(best_next)
                 current = best_next
 
-            # 对补货点部分进行 2-opt 优化（不含起点）
             if len(ordered) > 3:
-                # 提取补货点序列（去掉起点）
                 point_part = ordered[1:]
                 optimized_part = two_opt(point_part, dist_matrix)
                 ordered = [depot_idx] + optimized_part
 
-            # 计算真实距离和成本
             dist_vehicle = 0.0
             for i in range(len(ordered)-1):
                 dist_vehicle += dist_matrix[ordered[i]][ordered[i+1]]
@@ -180,7 +176,6 @@ def solve():
             total_cost += cost_vehicle
 
             route_coords = [all_coords[idx] for idx in ordered]
-
             all_routes.append({
                 'depot_index': depot_idx,
                 'vehicle_index': len(all_routes) + 1,
@@ -188,7 +183,6 @@ def solve():
                 'distance': dist_vehicle,
                 'cost': cost_vehicle
             })
-            print(f"车辆 {len(all_routes)}: 补货点 {len(group)} 个，优化后距离 {dist_vehicle:.2f} km")
 
     print("规划完成")
     return jsonify({
